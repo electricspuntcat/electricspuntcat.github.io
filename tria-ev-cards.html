@@ -1,0 +1,405 @@
+<!--
+  elèctrics|cat — Tria EV (portal dinàmic)
+  =========================================
+  Aquest fitxer llegeix les dades directament del Google Sheet (sense backend,
+  sense BigQuery) des de l'enllaç "Publicat a la web" en format CSV.
+
+  PASSOS PER POSAR-HO EN MARXA
+  -----------------------------
+  1. Al Google Sheet: Fitxer → Compartir → Publica a la web → tria la
+     pestanya amb les dades i el format "Valors separats per comes (.csv)"
+     → Publica.
+  2. Enganxa la URL resultant a PUBLISHED_CSV_URL a la secció CONFIG.
+  3. Revisa COLUMN_ALIASES si els noms de columna del teu full no coincideixen
+     amb els que hi ha per defecte (Segment, Model, Índex eCat, Imatge...).
+  4. Puja aquest fitxer a un hosting estàtic (Netlify, GitHub Pages...).
+  5. A Google Sites: Insereix → Incrusta → "Per URL" → enganxa la URL del
+     hosting.
+-->
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tria EV — elèctrics|cat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --blue:#1977AA;
+    --blue-dark:#125a80;
+    --ink:#1c1c1c;
+    --paper:#ffffff;
+    --line:#e4e4e4;
+    --muted:#6b6b6b;
+    --bg-soft:#f6f9fb;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);
+    font-family:'Lato',system-ui,sans-serif;}
+  #app{max-width:1080px;margin:0 auto;padding:20px 16px 48px;}
+
+  .head{display:flex;align-items:baseline;justify-content:space-between;
+    gap:12px;flex-wrap:wrap;border-bottom:2px solid var(--ink);
+    padding-bottom:14px;margin-bottom:18px;}
+  .head h1{font-size:22px;font-weight:900;margin:0;letter-spacing:-0.01em;}
+  .head .sub{color:var(--muted);font-size:13px;max-width:420px;}
+
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+    margin-bottom:22px;}
+  .seg-tabs{display:flex;gap:6px;flex-wrap:wrap;}
+  .seg-tab{border:1px solid var(--line);background:var(--paper);
+    color:var(--ink);padding:7px 13px;border-radius:999px;font-size:13px;
+    font-weight:700;cursor:pointer;font-family:inherit;transition:.15s;}
+  .seg-tab:hover{border-color:var(--blue);}
+  .seg-tab.active{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .search{margin-left:auto;position:relative;}
+  .search input{border:1px solid var(--line);border-radius:999px;
+    padding:7px 14px;font-family:inherit;font-size:13px;width:180px;
+    outline:none;}
+  .search input:focus{border-color:var(--blue);}
+
+  .segment-block{margin-bottom:34px;}
+  .segment-title{font-size:15px;font-weight:900;color:var(--blue-dark);
+    margin:0 0 2px;}
+  .segment-count{color:var(--muted);font-size:12px;margin-bottom:14px;}
+
+  .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+    gap:16px;}
+
+  .card{border:1px solid var(--line);border-radius:12px;overflow:hidden;
+    background:var(--paper);display:flex;flex-direction:column;
+    transition:box-shadow .15s, border-color .15s;}
+  .card:hover{border-color:var(--blue);box-shadow:0 4px 14px rgba(25,119,170,.12);}
+
+  .card-photo{aspect-ratio:4/3;background:var(--bg-soft);display:flex;
+    align-items:center;justify-content:center;overflow:hidden;}
+  .card-photo img{width:100%;height:100%;object-fit:contain;padding:8px;}
+  .card-photo .ph-icon{color:var(--line);width:46px;height:46px;}
+
+  .card-body{padding:12px 14px 16px;text-align:center;}
+  .card-index{font-size:26px;font-weight:900;color:var(--blue);
+    font-variant-numeric:tabular-nums;line-height:1.1;}
+  .card-model{display:block;font-weight:700;font-size:13px;color:var(--ink);
+    text-decoration:none;text-transform:uppercase;letter-spacing:.02em;
+    margin:2px 0 10px;}
+  .card-model:hover{color:var(--blue);text-decoration:underline;}
+
+  .variant{display:flex;align-items:center;justify-content:center;gap:6px;
+    font-size:12px;color:var(--muted);padding:3px 0;flex-wrap:wrap;}
+  .variant.top{color:var(--ink);font-weight:700;}
+  .v-index{font-weight:900;color:var(--blue);min-width:30px;text-align:right;}
+  .variant.top .v-index{color:var(--blue-dark);}
+  .v-sep{color:var(--line);}
+  .v-item{display:inline-flex;align-items:center;gap:3px;}
+  .v-item svg{width:13px;height:13px;flex:none;}
+
+  .card-price{margin-top:9px;font-size:11.5px;color:var(--muted);
+    border-top:1px solid var(--line);padding-top:8px;}
+  .card-note{font-size:10.5px;color:var(--muted);margin-top:2px;}
+
+  .state{padding:40px 8px;text-align:center;color:var(--muted);font-size:14px;}
+  .state.error{color:#a33;text-align:left;background:#fdf3f3;
+    border:1px solid #f2c9c9;border-radius:8px;padding:16px 18px;}
+  .state.error code{background:#fff;padding:1px 5px;border-radius:4px;}
+  footer{margin-top:30px;color:var(--muted);font-size:11.5px;
+    border-top:1px solid var(--line);padding-top:12px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="head">
+    <h1>Tria EV</h1>
+    <div class="sub">Comparativa de cotxes elèctrics per segments, ordenats per l'índex eCat (bateria neta, autonomia realista, consum i preu).</div>
+  </div>
+  <div class="controls">
+    <div class="seg-tabs" id="segTabs"></div>
+    <div class="search"><input id="searchBox" type="text" placeholder="Cerca un model…"></div>
+  </div>
+  <div id="content"><div class="state">Carregant dades del full de càlcul…</div></div>
+  <footer>Dades: full de càlcul d'elèctrics·cat · Autonomia i bateria: ev-database.org · Actualitzat en carregar la pàgina.</footer>
+</div>
+
+<script>
+/* ============================ CONFIG ============================ */
+// URL del full "Publicat a la web" en format CSV (Fitxer → Compartir →
+// Publica a la web → tria la pestanya i el format CSV).
+const PUBLISHED_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRpkxgUYdgTPulTJSQRATiEacWSj1C08rPtvunehpln4taQr0jdPDR2RmYA5rkIHo53Cx1raLEtzv6m/pub?gid=159281748&single=true&output=csv";
+
+// Noms de columna possibles a la teva capçalera. Afegeix-hi variants si el
+// teu full fa servir un altre nom.
+const COLUMN_ALIASES = {
+  segment:   ["segment"],
+  model:     ["model", "cotxe", "vehicle"],
+  index:     ["índex ecat", "index ecat", "ecat", "índex"],
+  battery:   ["bateria", "bateria (kwh)", "bateria neta", "kwh"],
+  range:     ["autonomia", "autonomia (km)", "autonomia realista", "km"],
+  price:     ["preu", "preu (€)", "preu km77"],
+  image:     ["imatge", "image", "foto", "photo"],
+  link:      ["enllaç", "enllac", "link", "url", "ev-database"],
+  note:      ["nota", "notes", "observacions"]
+};
+
+// Ordre en què es mostren els segments (deixa "[]" per usar l'ordre d'aparició).
+const SEGMENT_ORDER = ["A", "B", "C", "D", "E", "E/F", "F", "N", "S"];
+// Columna que marca els models a excloure (per lletra de columna del full,
+// ex. "K"). Si la cel·la d'aquesta columna conté el text indicat
+// (sense distingir majúscules/minúscules), la fila es descarta.
+const EXCLUDE_COLUMN_LETTER = "K";
+const EXCLUDE_VALUE = "obsolet";
+/* ================================================================== */
+
+const state = { rows: [], columns: {}, activeSegment: "__all__", query: "" };
+
+const ICON_BATTERY = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="7" width="17" height="10" rx="2" stroke="currentColor" stroke-width="2"/><rect x="21" y="10" width="2" height="4" rx="1" fill="currentColor"/><rect x="4.5" y="9.5" width="7" height="5" fill="currentColor"/></svg>`;
+const ICON_ROAD = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 20 9 4h6l4 16" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 6v3M12 12v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+const ICON_CAR = `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 30l3-10a4 4 0 014-3h22a4 4 0 014 3l3 10" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><rect x="4" y="30" width="40" height="8" rx="3" stroke="currentColor" stroke-width="2.5"/><circle cx="13" cy="38" r="3" stroke="currentColor" stroke-width="2.5"/><circle cx="35" cy="38" r="3" stroke="currentColor" stroke-width="2.5"/></svg>`;
+
+function norm(s){
+  return (s||"").toString().trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+}
+
+// Converteix una lletra de columna del full ("K") al seu índex (0-based).
+function colLetterToIndex(letter){
+  let n = 0;
+  for (const ch of letter.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+// Els enllaços "uc?export=view&id=..." de Drive sovint fallen incrustats
+// com a <img>. L'endpoint de miniatures és més fiable pel mateix fitxer.
+function normalizeImageUrl(url){
+  if (!url) return url;
+  if (url.includes("drive.google.com")) {
+    const m = url.match(/[-\w]{20,}/);
+    if (m) return `https://drive.google.com/thumbnail?id=${m[0]}&sz=w600`;
+  }
+  return url;
+}
+
+function detectColumns(headerRow){
+  const headers = headerRow.map(norm);
+  const found = {};
+  const missing = [];
+  Object.entries(COLUMN_ALIASES).forEach(([key, aliases]) => {
+    const idx = headers.findIndex(h => aliases.some(a => h === norm(a) || h.includes(norm(a))));
+    if (idx >= 0) found[key] = idx;
+    else if (["segment","model","index"].includes(key)) missing.push(key);
+  });
+  return { found, missing, headers: headerRow };
+}
+
+function parseNumber(raw){
+  if (raw === null || raw === undefined || raw === "") return null;
+  if (typeof raw === "number") return raw;
+  let s = raw.toString().trim().replace(/[^\d,.\-]/g,"");
+  // Format europeu: "." és separador de milers, "," és el decimal
+  // (28.000,00 -> 28000.00). Si no hi ha coma, els punts es tracten
+  // com a milers només si n'hi ha més d'un o van seguits de 3 xifres.
+  if (s.includes(",")) {
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if ((s.match(/\./g) || []).length > 1) {
+    s = s.replace(/\.(?=\d{3}(\D|$))/g, "");
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// Petit parser de CSV: gestiona camps entre cometes, comes i salts de línia
+// dins de cometes (Google exporta CSV amb aquest format).
+function parseCSV(text){
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++){
+    const c = text[i], next = text[i+1];
+    if (inQuotes){
+      if (c === '"' && next === '"'){ field += '"'; i++; }
+      else if (c === '"'){ inQuotes = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ','){ row.push(field); field = ""; }
+      else if (c === '\n'){ row.push(field); rows.push(row); row = []; field = ""; }
+      else if (c === '\r'){ /* skip */ }
+      else field += c;
+    }
+  }
+  if (field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(f => f.trim() !== ""));
+}
+
+async function loadData(){
+  let res;
+  try{
+    res = await fetch(PUBLISHED_CSV_URL);
+  }catch(e){
+    throw new Error("NETWORK");
+  }
+  if (!res.ok) throw new Error("HTTP_" + res.status);
+  const text = await res.text();
+  const table = parseCSV(text);
+  if (!table.length) throw new Error("PARSE");
+
+  const [headerRow, ...dataRows] = table;
+  const { found, missing, headers } = detectColumns(headerRow);
+  if (missing.length) {
+    const err = new Error("MISSING_COLUMNS");
+    err.detail = { missing, headers };
+    throw err;
+  }
+  state.columns = found;
+
+  const excludeIdx = colLetterToIndex(EXCLUDE_COLUMN_LETTER);
+
+  state.rows = dataRows
+    .filter(r => r[found.model] && r[found.model].trim())
+    .filter(r => !norm(r[excludeIdx] || "").includes(norm(EXCLUDE_VALUE)))
+    .map(r => ({
+      segment: (r[found.segment] ?? "").trim(),
+      model:   (r[found.model] ?? "").trim(),
+      index:   parseNumber(found.index !== undefined ? r[found.index] : null),
+      battery: found.battery !== undefined ? (r[found.battery] || "").trim() : null,
+      range:   found.range   !== undefined ? (r[found.range]   || "").trim() : null,
+      price:   found.price   !== undefined ? (r[found.price]   || "").trim() : null,
+      image:   found.image   !== undefined ? (r[found.image]   || "").trim() : null,
+      link:    found.link    !== undefined ? (r[found.link]    || "").trim() : null,
+      note:    found.note    !== undefined ? (r[found.note]    || "").trim() : null,
+    }));
+}
+
+function segmentsPresent(){
+  const set = new Set(state.rows.map(r => r.segment).filter(Boolean));
+  const ordered = SEGMENT_ORDER.filter(s => set.has(s));
+  const rest = [...set].filter(s => !ordered.includes(s)).sort();
+  return [...ordered, ...rest];
+}
+
+function renderTabs(){
+  const segs = segmentsPresent();
+  const tabsEl = document.getElementById("segTabs");
+  tabsEl.innerHTML = "";
+  const allBtn = document.createElement("button");
+  allBtn.className = "seg-tab" + (state.activeSegment === "__all__" ? " active" : "");
+  allBtn.textContent = "Tots";
+  allBtn.onclick = () => { state.activeSegment = "__all__"; render(); };
+  tabsEl.appendChild(allBtn);
+  segs.forEach(seg => {
+    const b = document.createElement("button");
+    b.className = "seg-tab" + (state.activeSegment === seg ? " active" : "");
+    b.textContent = "Segment " + seg;
+    b.onclick = () => { state.activeSegment = seg; render(); };
+    tabsEl.appendChild(b);
+  });
+}
+
+// Agrupa les files pel mateix model (un cotxe pot tenir diverses variants:
+// bateries/autonomies diferents) i les ordena de millor a pitjor índex.
+function groupByModel(rows){
+  const map = new Map();
+  rows.forEach(r => {
+    const key = r.segment + "|" + norm(r.model);
+    if (!map.has(key)) map.set(key, { segment: r.segment, model: r.model, image: null, link: null, price: null, note: null, variants: [] });
+    const g = map.get(key);
+    g.variants.push(r);
+    if (!g.image && r.image) g.image = r.image;
+    if (!g.link && r.link) g.link = r.link;
+    if (!g.note && r.note) g.note = r.note;
+  });
+  return [...map.values()].map(g => {
+    g.variants.sort((a,b) => (b.index||0) - (a.index||0));
+    g.topIndex = g.variants[0]?.index ?? null;
+    const prices = g.variants.map(v => parseNumber(v.price)).filter(p => p !== null);
+    g.minPrice = prices.length ? Math.min(...prices) : null;
+    return g;
+  });
+}
+
+function idxLabel(n){
+  return n !== null && n !== undefined ? n.toLocaleString('ca-ES',{minimumFractionDigits:2,maximumFractionDigits:2}) : "—";
+}
+
+function cardHtml(g){
+  const imgSrc = normalizeImageUrl(g.image);
+  const photo = imgSrc
+    ? `<img src="${imgSrc}" alt="${g.model}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="ph-icon" style="display:none">${ICON_CAR}</span>`
+    : `<span class="ph-icon" style="display:flex">${ICON_CAR}</span>`;
+  const modelTag = g.link
+    ? `<a class="card-model" href="${g.link}" target="_blank" rel="noopener">${g.model}</a>`
+    : `<span class="card-model">${g.model}</span>`;
+  const variantsHtml = g.variants.map((v, i) => `
+    <div class="variant ${i===0 ? 'top' : ''}">
+      <span class="v-index">${idxLabel(v.index)}</span>
+      <span class="v-sep">·</span>
+      <span class="v-item">${ICON_BATTERY}${v.battery ? v.battery + ' kWh' : '—'}</span>
+      <span class="v-sep">·</span>
+      <span class="v-item">${ICON_ROAD}${v.range ? v.range + ' km' : '—'}</span>
+    </div>`).join("");
+
+  return `<div class="card">
+    <div class="card-photo">${photo}</div>
+    <div class="card-body">
+      <div class="card-index">${idxLabel(g.topIndex)}</div>
+      ${modelTag}
+      <div class="variants">${variantsHtml}</div>
+      ${g.minPrice !== null ? `<div class="card-price">des de ${g.minPrice.toLocaleString('ca-ES')} €</div>` : ""}
+      ${g.note ? `<div class="card-note">${g.note}</div>` : ""}
+    </div>
+  </div>`;
+}
+
+function render(){
+  renderTabs();
+  const content = document.getElementById("content");
+  const q = norm(state.query);
+
+  let rows = state.rows;
+  if (state.activeSegment !== "__all__") rows = rows.filter(r => r.segment === state.activeSegment);
+  if (q) rows = rows.filter(r => norm(r.model).includes(q));
+
+  if (!rows.length) {
+    content.innerHTML = `<div class="state">Cap model trobat.</div>`;
+    return;
+  }
+
+  const bySegment = {};
+  rows.forEach(r => { (bySegment[r.segment] ||= []).push(r); });
+  const order = state.activeSegment !== "__all__" ? [state.activeSegment] : segmentsPresent();
+
+  content.innerHTML = order.filter(s => bySegment[s]?.length).map(seg => {
+    const groups = groupByModel(bySegment[seg]).sort((a,b) => (b.topIndex||0) - (a.topIndex||0));
+    return `<div class="segment-block">
+      <div class="segment-title">Segment ${seg}</div>
+      <div class="segment-count">${groups.length} model${groups.length===1?"":"s"}</div>
+      <div class="card-grid">${groups.map(cardHtml).join("")}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderError(err){
+  const content = document.getElementById("content");
+  let msg = "";
+  if (err.message === "MISSING_COLUMNS") {
+    msg = `No trobo totes les columnes necessàries (<code>segment</code>, <code>model</code>, <code>índex eCat</code>).<br><br>
+    Capçaleres detectades al full: <code>${err.detail.headers.join(", ")}</code><br>
+    Falten: <code>${err.detail.missing.join(", ")}</code><br><br>
+    Edita <code>COLUMN_ALIASES</code> a l'inici del fitxer perquè coincideixi amb els noms reals de les teves columnes.`;
+  } else if (err.message.startsWith("HTTP_") || err.message === "SHEET_ERROR" || err.message === "PARSE") {
+    msg = `No he pogut llegir el full de càlcul.<br><br>
+    Comprova que l'enllaç "Publicat a la web" (<code>PUBLISHED_CSV_URL</code>) segueix actiu i apunta a la pestanya correcta.`;
+  } else {
+    msg = "Error de xarxa en carregar el full de càlcul. Assegura't que aquest fitxer s'obre des d'un servidor (http/https), no com a fitxer local.";
+  }
+  content.innerHTML = `<div class="state error">${msg}</div>`;
+}
+
+document.getElementById("searchBox").addEventListener("input", (e) => {
+  state.query = e.target.value;
+  render();
+});
+
+loadData().then(render).catch(renderError);
+</script>
+</body>
+</html>
