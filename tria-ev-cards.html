@@ -132,7 +132,6 @@ const PUBLISHED_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRpkx
 const COLUMN_ALIASES = {
   segment:   ["segment"],
   model:     ["model", "cotxe", "vehicle"],
-  index:     ["índex ecat", "index ecat", "ecat", "índex"],
   battery:   ["bateria", "bateria (kwh)", "bateria neta", "kwh"],
   range:     ["autonomia", "autonomia (km)", "autonomia realista", "km"],
   price:     ["preu", "preu (€)", "preu km77"],
@@ -140,6 +139,11 @@ const COLUMN_ALIASES = {
   link:      ["enllaç", "enllac", "link", "url", "ev-database"],
   note:      ["nota", "notes", "observacions"]
 };
+
+// L'índex mostrat surt sempre d'aquesta columna fixa del full (la que
+// inclou totes les ponderacions), no de la que es detecti pel nom de la
+// capçalera.
+const INDEX_COLUMN_LETTER = "I";
 
 // Ordre en què es mostren els segments (deixa "[]" per usar l'ordre d'aparició).
 const SEGMENT_ORDER = ["A", "B", "C", "D", "E", "E/F", "F", "N", "S"];
@@ -186,7 +190,7 @@ function detectColumns(headerRow){
   Object.entries(COLUMN_ALIASES).forEach(([key, aliases]) => {
     const idx = headers.findIndex(h => aliases.some(a => h === norm(a) || h.includes(norm(a))));
     if (idx >= 0) found[key] = idx;
-    else if (["segment","model","index"].includes(key)) missing.push(key);
+    else if (["segment","model"].includes(key)) missing.push(key);
   });
   return { found, missing, headers: headerRow };
 }
@@ -250,6 +254,7 @@ async function loadData(){
     throw err;
   }
   state.columns = found;
+  found.index = colLetterToIndex(INDEX_COLUMN_LETTER);
 
   const excludeIdx = colLetterToIndex(EXCLUDE_COLUMN_LETTER);
 
@@ -259,14 +264,15 @@ async function loadData(){
     .map(r => ({
       segment: (r[found.segment] ?? "").trim(),
       model:   (r[found.model] ?? "").trim(),
-      index:   parseNumber(found.index !== undefined ? r[found.index] : null),
+      index:   parseNumber(r[found.index]),
       battery: found.battery !== undefined ? (r[found.battery] || "").trim() : null,
       range:   found.range   !== undefined ? (r[found.range]   || "").trim() : null,
       price:   found.price   !== undefined ? (r[found.price]   || "").trim() : null,
       image:   found.image   !== undefined ? (r[found.image]   || "").trim() : null,
       link:    found.link    !== undefined ? (r[found.link]    || "").trim() : null,
       note:    found.note    !== undefined ? (r[found.note]    || "").trim() : null,
-    }));
+    }))
+    .filter(r => r.index !== 0);
 }
 
 function segmentsPresent(){
