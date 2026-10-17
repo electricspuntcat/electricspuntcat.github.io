@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Càrrega EV - Peugeot & Tesla</title>
+  <!-- PWA Manifest & Meta -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Càrrega EV">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js for statistics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            peugeot: '#0055a5',
+            tesla: '#e82127',
+            brand: {
+              50: '#ecfdf5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      overscroll-behavior-y: contain;
+      -webkit-tap-highlight-color: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .safe-bottom {
+      padding-bottom: env(safe-area-inset-bottom, 16px);
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-emerald-500 selection:text-white">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-30 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-bold">
+        ⚡
+      </div>
+      <div>
+        <h1 class="text-base font-bold leading-tight">Càrrega EV</h1>
+        <p class="text-xs text-slate-400" id="syncStatus">Full sincronitzat</p>
+      </div>
+    </div>
+    
+    <div class="flex items-center gap-2">
+      <button id="quickSyncBtn" onclick="syncWithGoogleSheets()" class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1.5 transition active:scale-95">
+        <svg id="syncIcon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+        <span>Sincronitza</span>
+      </button>
+      <button onclick="switchTab('settings')" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition active:scale-95" title="Configuració">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-lg w-full mx-auto p-4 pb-24">
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 opacity-0 pointer-events-none transform -translate-y-2 max-w-xs w-full">
+      <div id="toastContent" class="bg-emerald-600 text-white text-sm font-medium px-4 py-2.5 rounded-xl shadow-lg border border-emerald-400/30 flex items-center gap-2">
+        <span>✓</span> <span id="toastMsg">Fet</span>
+      </div>
+    </div>
+
+    <!-- TAB 1: FORMULARI DE REGISTRE -->
+    <section id="tab-register" class="space-y-4">
+      
+      <!-- Selector de Vehicle amb Odòmetre detectat -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Selecciona el vehicle</label>
+        <div class="grid grid-cols-2 gap-3">
+          <!-- Tesla Model 3 -->
+          <button type="button" id="btnCarTesla" onclick="selectCar('Tesla')" class="relative p-3.5 rounded-2xl border-2 transition-all flex flex-col items-center justify-center text-center bg-slate-900 border-red-500 shadow-md shadow-red-500/10 active:scale-95">
+            <div class="w-10 h-10 rounded-full bg-red-600/20 text-red-400 flex items-center justify-center mb-1 text-xl font-bold">
+              ⚡
+            </div>
+            <span class="font-bold text-sm text-white">Tesla</span>
+            <span class="text-[11px] text-red-400 mt-0.5">Últim: <span id="lastKmTesla">29.209</span> km</span>
+            <span class="text-[10px] text-slate-400">02:00 - 06:00 (4h)</span>
+            <div id="badgeTesla" class="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-red-500 ring-4 ring-red-500/20"></div>
+          </button>
+
+          <!-- Peugeot e-2008 -->
+          <button type="button" id="btnCarPeugeot" onclick="selectCar('Peugeot')" class="relative p-3.5 rounded-2xl border-2 transition-all flex flex-col items-center justify-center text-center bg-slate-900 border-slate-800 text-slate-400 active:scale-95">
+            <div class="w-10 h-10 rounded-full bg-blue-600/20 text-blue-400 flex items-center justify-center mb-1 text-xl font-bold">
+              🦁
+            </div>
+            <span class="font-bold text-sm text-slate-200">Peugeot</span>
+            <span class="text-[11px] text-blue-400 mt-0.5">Últim: <span id="lastKmPeugeot">69.751</span> km</span>
+            <span class="text-[10px] text-slate-400">00:05 - 08:00</span>
+            <div id="badgePeugeot" class="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-blue-500 ring-4 ring-blue-500/20 hidden"></div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Formulari Càrrega exactament fidel a les 14 columnes de la fulla -->
+      <form id="chargeForm" onsubmit="handleFormSubmit(event)" class="bg-slate-900 rounded-3xl p-5 border border-slate-800 shadow-xl space-y-4">
+        
+        <!-- Punt de Càrrega (PdC) -->
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="text-xs font-semibold text-slate-300">Punt de Càrrega (PdC)</label>
+            <span id="rateLabelBadge" class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">Casa: 0,0847 €/kWh</span>
+          </div>
+
+          <!-- Botons ràpids dels punts habituals trobats al full -->
+          <div class="grid grid-cols-4 gap-1.5 mb-2">
+            <button type="button" onclick="setPdC('Home')" id="btnPdcHome" class="py-1.5 text-xs font-bold rounded-lg bg-emerald-600 text-white shadow transition text-center">
+              Home
+            </button>
+            <button type="button" onclick="setPdC('Port Mataró')" id="btnPdcPort" class="py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-slate-300 hover:text-white transition text-center">
+              Port Mataró
+            </button>
+            <button type="button" onclick="setPdC('La Roca AC')" id="btnPdcRoca" class="py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-slate-300 hover:text-white transition text-center">
+              La Roca
+            </button>
+            <button type="button" onclick="setPdC('Supercharger')" id="btnPdcSC" class="py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-slate-300 hover:text-white transition text-center">
+              SC Tesla
+            </button>
+          </div>
+
+          <input type="text" id="inputPdC" value="Home" required placeholder="Nom del punt (ex: Home, Decathlon, Boet...)" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition font-medium">
+        </div>
+
+        <!-- Data -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Data (Dia)</label>
+          <input type="date" id="inputDate" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition">
+        </div>
+
+        <!-- Horaris Suggerits habituals -->
+        <div class="bg-slate-950/60 p-3 rounded-2xl border border-slate-800">
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="text-xs font-medium text-slate-300">Horari de càrrega</label>
+            <span id="suggestedLabel" class="text-[11px] text-emerald-400 font-medium">Habitual Tesla (02:00 - 06:00)</span>
+          </div>
+          
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <span class="text-[11px] text-slate-400 mb-1 block">Hora Inici</span>
+              <input type="time" id="inputStartTime" step="1" required onchange="onTimeOrPercentChange()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition font-mono">
+            </div>
+            <div>
+              <span class="text-[11px] text-slate-400 mb-1 block">Hora Fi</span>
+              <input type="time" id="inputEndTime" step="1" required onchange="onTimeOrPercentChange()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition font-mono">
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between text-[11px] text-slate-400 mt-2">
+            <span id="calcDuration">Temps: 240 min (4h 00m)</span>
+            <span id="calcAvgKw">Potència mitjana: 3,5 kW</span>
+          </div>
+        </div>
+
+        <!-- Percentatges de Bateria (% in, % fi, % Dif) -->
+        <div class="bg-slate-950/60 p-3 rounded-2xl border border-slate-800 space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="text-xs font-semibold text-slate-300">Bateria (% inicial i final)</label>
+            <span class="text-[11px] text-slate-400" id="percentNotice">Calcula automàticament els kWh</span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <span class="text-[11px] text-slate-400 mb-0.5 block">% Inicial</span>
+              <div class="relative">
+                <input type="number" id="inputPercentIn" min="0" max="100" placeholder="Ex: 45" oninput="onBatteryPercentInput()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-sm text-center text-slate-100 focus:outline-none focus:border-emerald-500 transition font-semibold">
+                <span class="absolute right-2 top-2 text-xs text-slate-500">%</span>
+              </div>
+            </div>
+            <div>
+              <span class="text-[11px] text-slate-400 mb-0.5 block">% Final</span>
+              <div class="relative">
+                <input type="number" id="inputPercentFi" min="0" max="100" placeholder="Ex: 68" oninput="onBatteryPercentInput()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-sm text-center text-slate-100 focus:outline-none focus:border-emerald-500 transition font-semibold">
+                <span class="absolute right-2 top-2 text-xs text-slate-500">%</span>
+              </div>
+            </div>
+            <div>
+              <span class="text-[11px] text-emerald-400 mb-0.5 block font-medium">% Dif</span>
+              <div class="w-full bg-slate-900 border border-emerald-500/30 rounded-xl py-2 text-sm text-center font-bold text-emerald-400" id="displayPercentDif">
+                +23%
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Energia (kWh) i Odòmetre (Km) -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Energia (kWh)</label>
+            <div class="relative">
+              <input type="number" id="inputKwh" step="0.01" min="0" value="14" required oninput="onManualKwhChange()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 font-bold focus:outline-none focus:border-emerald-500 transition">
+              <span class="absolute right-3 top-2.5 text-xs text-slate-500 font-medium">kWh</span>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Odòmetre (Km)</label>
+            <input type="number" id="inputKm" placeholder="Ex: 29250" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition">
+          </div>
+        </div>
+
+        <!-- Preu per kWh i Cost Total -->
+        <div class="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="text-xs font-semibold text-slate-200">Preu i Cost de la Càrrega</label>
+            <button type="button" onclick="applyHomeRate()" class="text-[11px] text-emerald-400 hover:underline">
+              Preu casa (<span id="homeRateDisplay">0,0847</span> €)
+            </button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <span class="text-[11px] text-slate-400 mb-1 block">Preu / kWh</span>
+              <div class="relative">
+                <input type="number" id="inputRatePerKwh" step="0.0001" min="0" value="0.0847" oninput="onPriceRateChange()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm font-semibold text-slate-200 focus:outline-none focus:border-emerald-500 transition">
+                <span class="absolute right-2.5 top-2 text-xs text-slate-400">€</span>
+              </div>
+            </div>
+            <div>
+              <span class="text-[11px] text-emerald-400 font-semibold mb-1 block">Cost Total</span>
+              <div class="relative">
+                <input type="number" id="inputTotalCost" step="0.01" min="0" value="1.19" required oninput="onTotalCostManualChange()" class="w-full bg-slate-900 border border-emerald-500/50 rounded-xl px-3 py-2 text-base font-extrabold text-emerald-400 focus:outline-none focus:border-emerald-500 transition">
+                <span class="absolute right-2.5 top-2 text-xs font-bold text-slate-400">€</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Botó Desar -->
+        <button type="submit" id="submitBtn" class="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold text-base shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition flex items-center justify-center gap-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+          <span>Afegir al Google Sheet</span>
+        </button>
+      </form>
+    </section>
+
+    <!-- TAB 2: HISTÒRIC I SEGUIMENT -->
+    <section id="tab-history" class="space-y-4 hidden">
+      
+      <!-- Targetes Resum Mètriques Reals -->
+      <div class="grid grid-cols-2 gap-3">
+        <!-- Despesa Aquest Mes -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 relative overflow-hidden">
+          <div class="text-[11px] font-medium text-slate-400">Aquest mes (Oct 2026)</div>
+          <div class="text-xl font-extrabold text-emerald-400 mt-1" id="statMonthCost">0,00 €</div>
+          <div class="text-[11px] text-slate-400 mt-0.5" id="statMonthKwh">0 kWh</div>
+          <div class="absolute -right-2 -bottom-2 w-12 h-12 bg-emerald-500/5 rounded-full pointer-events-none"></div>
+        </div>
+
+        <!-- Despesa Total Històrica -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 relative overflow-hidden">
+          <div class="text-[11px] font-medium text-slate-400">Despesa Total Històric</div>
+          <div class="text-xl font-extrabold text-white mt-1" id="statTotalCost">0,00 €</div>
+          <div class="text-[11px] text-slate-400 mt-0.5" id="statTotalCharges">0 càrregues</div>
+          <div class="absolute -right-2 -bottom-2 w-12 h-12 bg-blue-500/5 rounded-full pointer-events-none"></div>
+        </div>
+      </div>
+
+      <!-- Desglossament per vehicle -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <h3 class="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">Històric per vehicle</h3>
+        
+        <!-- Tesla Bar -->
+        <div class="space-y-1 mb-3">
+          <div class="flex justify-between text-xs font-medium">
+            <span class="flex items-center gap-1.5 text-red-400"><span>⚡</span> Tesla Model 3</span>
+            <span class="text-white" id="statTeslaCost">0,00 € <span class="text-slate-500 text-[11px]" id="statTeslaKwh">(0 kWh)</span></span>
+          </div>
+          <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden">
+            <div id="barTesla" class="bg-red-500 h-2 rounded-full transition-all duration-500" style="width: 50%"></div>
+          </div>
+        </div>
+
+        <!-- Peugeot Bar -->
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs font-medium">
+            <span class="flex items-center gap-1.5 text-blue-400"><span>🦁</span> Peugeot e-2008</span>
+            <span class="text-white" id="statPeugeotCost">0,00 € <span class="text-slate-500 text-[11px]" id="statPeugeotKwh">(0 kWh)</span></span>
+          </div>
+          <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden">
+            <div id="barPeugeot" class="bg-blue-500 h-2 rounded-full transition-all duration-500" style="width: 50%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Gràfica mensual -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Evolució Despesa (€)</h3>
+          <span class="text-[11px] text-slate-400">Últims mesos</span>
+        </div>
+        <div class="h-44 w-full">
+          <canvas id="monthlyChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Llista de Càrregues recents -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Últimes càrregues</h3>
+          <span class="text-xs text-slate-400" id="chargesCountBadge">Carregant...</span>
+        </div>
+
+        <div id="chargesList" class="space-y-2">
+          <div class="text-center py-8 text-slate-500 text-sm">
+            Carregant dades del full de càlcul...
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: CONFIGURACIÓ -->
+    <section id="tab-settings" class="space-y-4 hidden">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-4">
+        <h2 class="text-sm font-bold text-white border-b border-slate-800 pb-2">Configuració Personalitzada</h2>
+        
+        <!-- Preu per defecte a Casa -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Preu per defecte kWh a casa (€/kWh)</label>
+          <div class="relative">
+            <input type="number" id="cfgHomePrice" step="0.0001" value="0.0847" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition">
+            <span class="absolute right-3.5 top-2.5 text-xs text-slate-400">€/kWh</span>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1">El teu preu habitual a casa al Google Sheet és actualment <strong>0,0847 €/kWh</strong>.</p>
+        </div>
+
+        <button onclick="saveSettings()" class="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 font-semibold text-xs border border-slate-700 transition">
+          Desar Canvis
+        </button>
+      </div>
+
+      <!-- Connexió amb Google Sheets -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h2 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>📊</span> Connexió Google Sheets
+          </h2>
+          <span class="text-[11px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Full vinculat</span>
+        </div>
+
+        <p class="text-xs text-slate-400 leading-relaxed">
+          URL de la teva aplicació web de Google Apps Script:
+        </p>
+
+        <div>
+          <input type="url" id="cfgSheetApiUrl" placeholder="https://script.google.com/macros/s/.../exec" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500 transition font-mono">
+        </div>
+
+        <div class="flex gap-2">
+          <button onclick="saveSheetUrl()" class="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition">
+            Connectar Apps Script
+          </button>
+          <button onclick="reloadFromSheetCsv()" class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition">
+            Recarregar CSV
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation Bar -->
+  <nav class="fixed bottom-0 left-0 right-0 z-30 bg-slate-900/95 backdrop-blur border-t border-slate-800 safe-bottom">
+    <div class="max-w-lg mx-auto grid grid-cols-3 h-16">
+      
+      <button onclick="switchTab('register')" id="nav-btn-register" class="flex flex-col items-center justify-center gap-1 text-emerald-400 font-semibold transition active:scale-95">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span class="text-[11px]">Nova Càrrega</span>
+      </button>
+
+      <button onclick="switchTab('history')" id="nav-btn-history" class="flex flex-col items-center justify-center gap-1 text-slate-400 hover:text-slate-200 transition active:scale-95">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+        <span class="text-[11px]">Històric i Despesa</span>
+      </button>
+
+      <button onclick="switchTab('settings')" id="nav-btn-settings" class="flex flex-col items-center justify-center gap-1 text-slate-400 hover:text-slate-200 transition active:scale-95">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        <span class="text-[11px]">Configuració</span>
+      </button>
+
+    </div>
+  </nav>
+
+  <script src="initialData.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
