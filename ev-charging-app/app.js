@@ -3,8 +3,8 @@
  * Adaptat exactament al Google Sheet de l'usuari
  */
 
-const APP_VERSION = 'v2.5.0';
-const APP_BUILD_DATE = '24/10/2026 21:10';
+const APP_VERSION = 'v2.5.1';
+const APP_BUILD_DATE = '24/10/2026 21:20';
 
 const SPREADSHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/172Qbr7TNXVji0boL61hC35tx6-9Oh9fCxk0rxzbvQsw/export?format=csv&gid=0';
 const STORAGE_KEY_CHARGES = 'ev_charges_full_v2';
@@ -930,6 +930,47 @@ function updateSyncStatus(text) {
   if (elem) elem.innerText = text;
 }
 
+// Converteix la data i hora d'una càrrega a timestamp numèric per a ordenació cronològica exacta
+function parseChargeDateToTimestamp(c) {
+  if (c.id && typeof c.id === 'string' && c.id.startsWith('chg_')) {
+    const ts = parseInt(c.id.replace('chg_', ''), 10);
+    if (!isNaN(ts) && ts > 1000000000) return ts;
+  }
+
+  if (c.Dia) {
+    const parts = c.Dia.split('/');
+    if (parts.length === 3) {
+      const d = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      let y = parseInt(parts[2], 10);
+      if (y < 100) y += 2000;
+      let h = 0, min = 0;
+      if (c.HoraInici) {
+        const timeParts = c.HoraInici.split(':');
+        h = parseInt(timeParts[0], 10) || 0;
+        min = parseInt(timeParts[1], 10) || 0;
+      }
+      const dt = new Date(y, m, d, h, min);
+      if (!isNaN(dt.getTime())) return dt.getTime();
+    }
+  }
+
+  return 0;
+}
+
+// Retorna les càrregues pendents ordenades cronològicament (de la més antiga a la més nova)
+// perquè a Google Sheets s'insereixin en l'ordre correcte amb appendRow
+function getPendingChargesOldestFirst() {
+  const pending = charges.filter(c => c.synced === false);
+  return pending.sort((a, b) => {
+    const timeA = parseChargeDateToTimestamp(a);
+    const timeB = parseChargeDateToTimestamp(b);
+    if (timeA !== timeB) return timeA - timeB;
+    // Si la data coincideix, la que es va crear abans està a un índex superior a charges (degut a unshift)
+    return charges.indexOf(b) - charges.indexOf(a);
+  });
+}
+
 async function syncWithGoogleSheets() {
   const icon = document.getElementById('syncIcon');
   if (icon) icon.classList.add('animate-spin');
@@ -937,8 +978,8 @@ async function syncWithGoogleSheets() {
 
   const apiUrl = getApiUrl();
 
-  // 1. Enviem al full qualsevol càrrega que hagi quedat pendent
-  const pending = charges.filter(c => c.synced === false);
+  // 1. Enviem al full qualsevol càrrega que hagi quedat pendent (de més antiga a més nova)
+  const pending = getPendingChargesOldestFirst();
   if (pending.length > 0 && apiUrl) {
     for (const p of pending) {
       await syncSingleChargeToSheets(p);
@@ -1394,7 +1435,7 @@ function sendViaGetRescue(apiUrl, action, charge) {
   });
 }
 
-// Forçar l'enviament de totes les càrregues guardades al mòbil pendents de sincronitzar
+// Forçar l'enviament de totes les càrregues guardades al mòbil pendents de sincronitzar (de més antiga a més nova)
 async function pushPendingCharges() {
   const apiUrl = getApiUrl();
   if (!apiUrl) {
@@ -1403,7 +1444,8 @@ async function pushPendingCharges() {
     return;
   }
 
-  const pending = charges.filter(c => c.synced === false);
+  // Ordenem cronològicament de la més antiga a la més nova abans d'enviar
+  const pending = getPendingChargesOldestFirst();
   if (pending.length === 0) {
     showToast('Totes les càrregues ja estan sincronitzades!');
     return;
