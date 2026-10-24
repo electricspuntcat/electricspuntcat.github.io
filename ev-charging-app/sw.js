@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ev-charging-v2';
+const CACHE_NAME = 'ev-charging-v2.5.0';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

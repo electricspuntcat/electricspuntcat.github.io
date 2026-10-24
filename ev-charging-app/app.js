@@ -3,6 +3,9 @@
  * Adaptat exactament al Google Sheet de l'usuari
  */
 
+const APP_VERSION = 'v2.5.0';
+const APP_BUILD_DATE = '24/10/2026 21:10';
+
 const SPREADSHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/172Qbr7TNXVji0boL61hC35tx6-9Oh9fCxk0rxzbvQsw/export?format=csv&gid=0';
 const STORAGE_KEY_CHARGES = 'ev_charges_full_v2';
 const STORAGE_KEY_SETTINGS = 'ev_settings_v2';
@@ -57,6 +60,16 @@ function loadSettings() {
       console.error(e);
     }
   }
+
+  // Actualitzar insígnies de versió a la interfície
+  const headerVersionBadge = document.getElementById('headerVersionBadge');
+  if (headerVersionBadge) headerVersionBadge.innerText = APP_VERSION;
+
+  const cfgAppVersionBadge = document.getElementById('cfgAppVersionBadge');
+  if (cfgAppVersionBadge) cfgAppVersionBadge.innerText = APP_VERSION;
+
+  const cfgAppBuildDate = document.getElementById('cfgAppBuildDate');
+  if (cfgAppBuildDate) cfgAppBuildDate.innerText = APP_BUILD_DATE;
 
   const cfgHomePrice = document.getElementById('cfgHomePrice');
   const homeRateDisplay = document.getElementById('homeRateDisplay');
@@ -946,9 +959,46 @@ async function syncWithGoogleSheets() {
 function initServiceWorker() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js')
-      .then(() => console.log('SW registrat'))
-      .catch(e => console.log(e));
+      .then((reg) => {
+        console.log('SW registrat', reg);
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                showToast('Nova versió detectada! Recarregant...', 'info');
+                setTimeout(() => window.location.reload(), 1200);
+              }
+            });
+          }
+        });
+      })
+      .catch(e => console.log('Error SW:', e));
   }
+}
+
+async function forceCheckAppUpdate() {
+  showToast('Netejant memòria cau i recarregant versió...');
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const registration of registrations) {
+        await registration.unregister();
+      }
+    }
+    if ('caches' in window) {
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+    }
+  } catch (err) {
+    console.error('Error netejant memòria cau:', err);
+  }
+
+  // Recarrega forçada afegint paràmetre de data per esquivar la memòria cau del navegador mòbil
+  setTimeout(() => {
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.location.href = cleanUrl + '?nocache=' + Date.now();
+  }, 500);
 }
 
 // ==========================================
