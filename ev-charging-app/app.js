@@ -8,6 +8,16 @@ const STORAGE_KEY_CHARGES = 'ev_charges_full_v2';
 const STORAGE_KEY_SETTINGS = 'ev_settings_v2';
 const STORAGE_KEY_API_URL = 'ev_sheets_api_url_v2';
 
+// URL pre-configurada per defecte (perquè funcioni automàticament al mòbil sense haver d'escriure res a mà)
+const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxitvd9KkXku4d_8lVIsjWQT6Ua55eNJpgopCwxFFu_ODLiaVPfQVK_zgtBQUAVUgZ3Ew/exec';
+
+function getApiUrl() {
+  const custom = localStorage.getItem(STORAGE_KEY_API_URL);
+  if (custom && custom.trim() !== '') return custom.trim();
+  if (DEFAULT_SCRIPT_URL && DEFAULT_SCRIPT_URL.trim() !== '') return DEFAULT_SCRIPT_URL.trim();
+  return '';
+}
+
 let currentCar = 'Tesla'; // 'Tesla' | 'Peugeot'
 let charges = [];
 let settings = {
@@ -53,11 +63,15 @@ function loadSettings() {
   if (cfgHomePrice) cfgHomePrice.value = settings.homeRate;
   if (homeRateDisplay) homeRateDisplay.innerText = settings.homeRate.toString().replace('.', ',');
 
-  const savedApiUrl = localStorage.getItem(STORAGE_KEY_API_URL);
+  const activeApiUrl = getApiUrl();
   const cfgSheetApiUrl = document.getElementById('cfgSheetApiUrl');
-  if (savedApiUrl && cfgSheetApiUrl) {
-    cfgSheetApiUrl.value = savedApiUrl;
-    updateSyncStatus('Apps Script connectat');
+  if (cfgSheetApiUrl) {
+    cfgSheetApiUrl.value = activeApiUrl;
+    if (activeApiUrl) {
+      updateSyncStatus('Apps Script connectat');
+    } else {
+      updateSyncStatus('⚠️ Falta configurar URL a Ajustos');
+    }
   }
 }
 
@@ -76,11 +90,14 @@ function saveSheetUrl() {
   const url = document.getElementById('cfgSheetApiUrl').value.trim();
   if (url) {
     localStorage.setItem(STORAGE_KEY_API_URL, url);
-    updateSyncStatus('Apps Script configurat');
-    showToast('URL desada correctament');
+    updateSyncStatus('Apps Script connectat');
+    showToast('URL connectada correctament!');
+    // Enviem automàticament qualsevol càrrega que hagi quedat pendent al mòbil
+    pushPendingCharges();
   } else {
     localStorage.removeItem(STORAGE_KEY_API_URL);
-    updateSyncStatus('Només lectura CSV');
+    updateSyncStatus('Sense URL de Google Sheets');
+    showToast('S\'ha eliminat la URL d\'Apps Script', 'warn');
   }
 }
 
@@ -338,9 +355,11 @@ async function handleFormSubmit(e) {
   }
 
   // Sincronitzar amb Google Apps Script
-  const apiUrl = localStorage.getItem(STORAGE_KEY_API_URL);
+  const apiUrl = getApiUrl();
   if (apiUrl) {
     syncSingleChargeToSheets(newRow);
+  } else {
+    showToast('⚠️ Desat al mòbil. Recorda connectar la URL a Configuració!', 'warn');
   }
 
   submitBtn.disabled = false;
@@ -351,28 +370,47 @@ async function handleFormSubmit(e) {
   }, 400);
 }
 
-// Sincronitzar càrrega amb Google Sheets
+// Sincronitzar càrrega amb Google Sheets (amb POST i rescat GET/JSONP per a mòbils)
 async function syncSingleChargeToSheets(charge) {
-  const apiUrl = localStorage.getItem(STORAGE_KEY_API_URL);
-  if (!apiUrl) return;
+  const apiUrl = getApiUrl();
+  if (!apiUrl) {
+    updateSyncStatus('⚠️ Falta URL Google Sheets');
+    return false;
+  }
 
+  updateSyncStatus('Enviant al Google Sheet...');
+  const payloadStr = JSON.stringify({
+    action: 'appendRow',
+    charge: charge
+  });
+
+  let ok = false;
   try {
-    updateSyncStatus('Enviant al Google Sheet...');
+    // 1. Intentem POST directe amb text/plain (CORS safelisted, evita preflight OPTIONS)
     await fetch(apiUrl, {
       method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'appendRow',
-        charge: charge
-      })
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: payloadStr
     });
+    ok = true;
+  } catch (errPost) {
+    console.warn('POST ha fallat o s\'ha bloquejat al mòbil, provant rescat GET...', errPost);
+  }
+
+  // 2. Si el navegador mòbil ha bloquejat el POST o el redirect 302, utilitzem rescat GET
+  if (!ok) {
+    ok = await sendViaGetRescue(apiUrl, 'appendRow', charge);
+  }
+
+  if (ok) {
     charge.synced = true;
     saveChargesLocally();
+    renderHistory();
     updateSyncStatus('Sincronitzat amb Google Sheets');
-  } catch (err) {
-    console.warn('Error en POST:', err);
-    updateSyncStatus('Desat localment');
+    return true;
+  } else {
+    updateSyncStatus('⚠️ Pendent de sincronitzar');
+    return false;
   }
 }
 
@@ -411,12 +449,20 @@ async function loadData() {
     charges = localData;
   }
 
+  // Assegurar que tots els registres tenen un id únic per poder editar-los
+  charges.forEach((c, idx) => {
+    if (!c.id) c.id = 'chg_' + (c.rowNumber ? 'row_' + c.rowNumber : 'idx_' + idx);
+    if (!c.rowNumber && c.synced) {
+      c.rowNumber = charges.length - idx + 1;
+    }
+  });
+
   updateLastKnownKmFromCharges();
   renderHistory();
   updateSyncStatus(`${charges.length} càrregues carregades`);
 
   // Si hi ha URL de Google Apps Script configurada, intentem obtenir les últimes dades del full
-  const apiUrl = localStorage.getItem(STORAGE_KEY_API_URL);
+  const apiUrl = getApiUrl();
   if (apiUrl) {
     fetchFromAppsScript(apiUrl);
   }
@@ -496,6 +542,10 @@ function mergeRemoteCharges(remoteList) {
   // Conservem només càrregues que s'hagin creat al mòbil i que encara estiguin pendents d'enviar (offline)
   const pendingSync = charges.filter(c => c.synced === false);
 
+  remoteList.forEach((r, idx) => {
+    if (!r.id) r.id = 'chg_' + (r.rowNumber ? 'row_' + r.rowNumber : 'remote_' + idx);
+  });
+
   // La llista que ve de Google Sheets és l'oficial: recull qualsevol edició, correcció o eliminació feta al full
   charges = [...pendingSync, ...remoteList];
 
@@ -506,7 +556,7 @@ function mergeRemoteCharges(remoteList) {
 }
 
 async function reloadFromSheetCsv() {
-  const apiUrl = localStorage.getItem(STORAGE_KEY_API_URL);
+  const apiUrl = getApiUrl();
   if (apiUrl) {
     fetchFromAppsScript(apiUrl);
   } else {
@@ -684,41 +734,82 @@ function renderHistory() {
   if (!container) return;
   const recent = charges.slice(0, 50);
 
-  container.innerHTML = recent.map(c => {
+  container.innerHTML = recent.map((c, idx) => {
     const isTesla = c.Cotxe === 'Tesla';
     const badgeColor = isTesla ? 'text-red-400 bg-red-500/10 border-red-500/20' : 'text-blue-400 bg-blue-500/10 border-blue-500/20';
     const icon = isTesla ? '⚡' : '🦁';
     const isHome = (c.PdC || '').toLowerCase().includes('home');
+    const isLatest = idx === 0;
 
     return `
-      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex items-center justify-between gap-3 hover:border-slate-700 transition">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-xl flex items-center justify-center text-lg ${badgeColor} border font-bold">
-            ${icon}
+      <div class="bg-slate-900 border ${isLatest ? 'border-emerald-500/50 shadow-md shadow-emerald-500/10' : 'border-slate-800'} rounded-2xl p-3.5 flex flex-col gap-2.5 hover:border-slate-700 transition">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center text-lg ${badgeColor} border font-bold flex-shrink-0">
+              ${icon}
+            </div>
+            <div>
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-bold text-sm text-white">${c.Cotxe}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded ${isHome ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'} font-medium">${c.PdC || 'Home'}</span>
+                ${c.PercentDif && c.PercentDif !== '0%' ? `<span class="text-[10px] text-emerald-400 font-bold bg-emerald-950/80 px-1 rounded">${c.PercentDif}</span>` : ''}
+                ${isLatest ? `<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold">Més recent</span>` : ''}
+              </div>
+              <div class="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+                <span>📅 ${c.Dia}</span>
+                <span>•</span>
+                <span>🕒 ${c.HoraInici}-${c.HoraFi}</span>
+                ${c.Km ? `<span>• 🚗 ${c.Km.toLocaleString('es-ES')} km</span>` : ''}
+              </div>
+            </div>
           </div>
-          <div>
-            <div class="flex items-center gap-2">
-              <span class="font-bold text-sm text-white">${c.Cotxe}</span>
-              <span class="text-[10px] px-1.5 py-0.5 rounded ${isHome ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'} font-medium">${c.PdC || 'Home'}</span>
-              ${c.PercentDif && c.PercentDif !== '0%' ? `<span class="text-[10px] text-emerald-400 font-bold bg-emerald-950/80 px-1 rounded">${c.PercentDif}</span>` : ''}
-            </div>
-            <div class="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
-              <span>📅 ${c.Dia}</span>
-              <span>•</span>
-              <span>🕒 ${c.HoraInici}-${c.HoraFi}</span>
-              ${c.Km ? `<span>• 🚗 ${c.Km.toLocaleString('es-ES')} km</span>` : ''}
-            </div>
+
+          <div class="text-right flex flex-col items-end flex-shrink-0">
+            <span class="font-extrabold text-base text-emerald-400">${c.Cost || '0,00 €'}</span>
+            <span class="text-xs text-slate-400">${c.Kwh} kWh</span>
+            <span class="text-[10px] text-slate-500">${c.Preu || ''}</span>
           </div>
         </div>
 
-        <div class="text-right flex flex-col items-end">
-          <span class="font-extrabold text-base text-emerald-400">${c.Cost || '0,00 €'}</span>
-          <span class="text-xs text-slate-400">${c.Kwh} kWh</span>
-          <span class="text-[10px] text-slate-500">${c.Preu || ''}</span>
+        <!-- Accions: Editar / Eliminar -->
+        <div class="flex items-center justify-between pt-2 border-t border-slate-800/60 mt-0.5">
+          <span class="text-[10px] text-slate-500">
+            ${c.rowNumber ? `Fila #${c.rowNumber}` : ''} ${c.synced === false ? '<span class="text-amber-400">• Pendent de sync</span>' : ''}
+          </span>
+          <div class="flex items-center gap-1.5">
+            <button type="button" onclick="openEditModal('${c.id}')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-emerald-400 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+              <span>Editar</span>
+            </button>
+            <button type="button" onclick="deleteCharge('${c.id}')" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-slate-700 text-xs transition active:scale-95" title="Eliminar registre">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+            </button>
+          </div>
         </div>
       </div>
     `;
   }).join('');
+
+  // Actualitzem l'estat del banner de càrregues pendents
+  const pending = charges.filter(c => c.synced === false);
+  const pendingBanner = document.getElementById('pendingSyncBanner');
+  const pendingCountElem = document.getElementById('pendingCount');
+  const settingsPendingBox = document.getElementById('settingsPendingBox');
+  const settingsPendingCount = document.getElementById('settingsPendingCount');
+
+  if (pending.length > 0) {
+    if (pendingBanner) {
+      pendingBanner.classList.remove('hidden');
+      if (pendingCountElem) pendingCountElem.innerText = pending.length;
+    }
+    if (settingsPendingBox) {
+      settingsPendingBox.classList.remove('hidden');
+      if (settingsPendingCount) settingsPendingCount.innerText = pending.length;
+    }
+  } else {
+    if (pendingBanner) pendingBanner.classList.add('hidden');
+    if (settingsPendingBox) settingsPendingBox.classList.add('hidden');
+  }
 
   renderMonthlyChart(monthlyData);
 }
@@ -831,7 +922,7 @@ async function syncWithGoogleSheets() {
   if (icon) icon.classList.add('animate-spin');
   updateSyncStatus('Sincronitzant...');
 
-  const apiUrl = localStorage.getItem(STORAGE_KEY_API_URL);
+  const apiUrl = getApiUrl();
 
   // 1. Enviem al full qualsevol càrrega que hagi quedat pendent
   const pending = charges.filter(c => c.synced === false);
@@ -857,5 +948,443 @@ function initServiceWorker() {
     navigator.serviceWorker.register('sw.js')
       .then(() => console.log('SW registrat'))
       .catch(e => console.log(e));
+  }
+}
+
+// ==========================================
+// FUNCIONS D'EDICIÓ I CORRECCIÓ DE REGISTRES
+// ==========================================
+
+function formatDiaToInputDate(diaStr) {
+  if (!diaStr) return new Date().toISOString().split('T')[0];
+  const parts = diaStr.split('/');
+  if (parts.length === 3) {
+    const d = parts[0].padStart(2, '0');
+    const m = parts[1].padStart(2, '0');
+    let y = parts[2];
+    if (y.length === 2) y = '20' + y;
+    return `${y}-${m}-${d}`;
+  }
+  return new Date().toISOString().split('T')[0];
+}
+
+function formatInputDateToDia(dateStr) {
+  if (!dateStr) return '';
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+    return `${parseInt(parts[2], 10)}/${parseInt(parts[1], 10)}/${parts[0]}`;
+  }
+  return dateStr;
+}
+
+function formatTimeToInputTime(timeStr) {
+  if (!timeStr) return '02:00';
+  const parts = timeStr.split(':');
+  if (parts.length >= 2) {
+    return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
+  }
+  return timeStr;
+}
+
+// Obrir modal d'edició
+function openEditModal(chargeId) {
+  const charge = charges.find(c => c.id === chargeId);
+  if (!charge) {
+    showToast('No s\'ha trobat el registre', 'error');
+    return;
+  }
+
+  document.getElementById('editChargeId').value = charge.id;
+  document.getElementById('editRowNumber').value = charge.rowNumber || '';
+  document.getElementById('editOldHoraInici').value = charge.HoraInici || '';
+
+  // Cotxe
+  selectEditCar(charge.Cotxe || 'Tesla');
+
+  // PdC
+  document.getElementById('editInputPdC').value = charge.PdC || 'Home';
+
+  // Data
+  document.getElementById('editInputDate').value = formatDiaToInputDate(charge.Dia);
+
+  // Hores
+  document.getElementById('editInputStartTime').value = formatTimeToInputTime(charge.HoraInici);
+  document.getElementById('editInputEndTime').value = formatTimeToInputTime(charge.HoraFi);
+
+  // Bateria %
+  const pIn = charge.PercentIn ? parseInt(charge.PercentIn.toString().replace('%', ''), 10) : '';
+  const pFi = charge.PercentFi ? parseInt(charge.PercentFi.toString().replace('%', ''), 10) : '';
+  document.getElementById('editPercentIn').value = isNaN(pIn) ? '' : pIn;
+  document.getElementById('editPercentFi').value = isNaN(pFi) ? '' : pFi;
+  document.getElementById('editDisplayPercentDif').innerText = charge.PercentDif || '+0%';
+
+  // kWh i Km
+  document.getElementById('editInputKwh').value = charge.Kwh || 0;
+  document.getElementById('editInputKm').value = charge.Km || '';
+
+  // Preu / kWh
+  let rateVal = parseLocaleFloat(charge.Preu);
+  if (!rateVal && (charge.PdC || '').toLowerCase().includes('home')) {
+    rateVal = settings.homeRate;
+  }
+  document.getElementById('editInputRatePerKwh').value = rateVal || settings.homeRate;
+
+  // Cost total
+  let costVal = charge.CostNum !== undefined ? charge.CostNum : parseEuroFloat(charge.Cost);
+  document.getElementById('editInputTotalCost').value = costVal ? costVal.toFixed(2) : '0.00';
+
+  // Recalcular càlculs d'hores
+  onEditTimeOrPercentChange();
+
+  // Subtitle
+  const rowInfo = charge.rowNumber ? `(Fila #${charge.rowNumber})` : '(Nou)';
+  document.getElementById('editModalSubtitle').innerText = `${charge.Cotxe} • ${charge.Dia} ${rowInfo}`;
+
+  // Obrir modal
+  const modal = document.getElementById('editModal');
+  modal.classList.remove('opacity-0', 'pointer-events-none');
+}
+
+function closeEditModal() {
+  const modal = document.getElementById('editModal');
+  modal.classList.add('opacity-0', 'pointer-events-none');
+}
+
+function selectEditCar(car) {
+  const btnTesla = document.getElementById('editBtnTesla');
+  const btnPeugeot = document.getElementById('editBtnPeugeot');
+  const inputCotxe = document.getElementById('editInputCotxe');
+
+  inputCotxe.value = car;
+  if (car === 'Tesla') {
+    btnTesla.className = "py-2.5 px-3 rounded-xl border-2 flex items-center justify-center gap-2 font-bold text-xs transition active:scale-95 bg-slate-950 border-red-500 text-white shadow";
+    btnPeugeot.className = "py-2.5 px-3 rounded-xl border-2 flex items-center justify-center gap-2 font-bold text-xs transition active:scale-95 bg-slate-950 border-slate-800 text-slate-400";
+  } else {
+    btnPeugeot.className = "py-2.5 px-3 rounded-xl border-2 flex items-center justify-center gap-2 font-bold text-xs transition active:scale-95 bg-slate-950 border-blue-500 text-white shadow";
+    btnTesla.className = "py-2.5 px-3 rounded-xl border-2 flex items-center justify-center gap-2 font-bold text-xs transition active:scale-95 bg-slate-950 border-slate-800 text-slate-400";
+  }
+  onEditTimeOrPercentChange();
+}
+
+function setEditPdC(pdc) {
+  document.getElementById('editInputPdC').value = pdc;
+  if (pdc === 'Home') {
+    document.getElementById('editInputRatePerKwh').value = settings.homeRate;
+  } else if (pdc === 'Port Mataró' || pdc === 'La Roca AC') {
+    document.getElementById('editInputRatePerKwh').value = 0;
+  } else if (pdc === 'Supercharger') {
+    document.getElementById('editInputRatePerKwh').value = 0.42;
+  }
+  onEditPriceRateChange();
+}
+
+function onEditTimeOrPercentChange() {
+  const start = document.getElementById('editInputStartTime').value;
+  const end = document.getElementById('editInputEndTime').value;
+  const mins = calculateDurationMinutes(start, end);
+
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  document.getElementById('editCalcDuration').innerText = `Temps: ${mins} min (${h}h ${m < 10 ? '0' : ''}${m}m)`;
+
+  const kwh = parseFloat(document.getElementById('editInputKwh').value) || 0;
+  if (mins > 0 && kwh > 0) {
+    const avgKw = (kwh / (mins / 60)).toFixed(1);
+    document.getElementById('editCalcAvgKw').innerText = `Potència mitjana: ${avgKw.replace('.', ',')} kW`;
+  } else {
+    document.getElementById('editCalcAvgKw').innerText = `Potència mitjana: -- kW`;
+  }
+}
+
+function onEditBatteryPercentInput() {
+  const pIn = parseFloat(document.getElementById('editPercentIn').value);
+  const pFi = parseFloat(document.getElementById('editPercentFi').value);
+  const displayDif = document.getElementById('editDisplayPercentDif');
+  const car = document.getElementById('editInputCotxe').value || 'Tesla';
+
+  if (!isNaN(pIn) && !isNaN(pFi) && pFi >= pIn) {
+    const diff = pFi - pIn;
+    displayDif.innerText = `+${diff}%`;
+
+    const capacity = BATTERY_CAPACITY[car] || 60.0;
+    const estimatedKwh = (diff / 100) * capacity;
+    const roundedKwh = Math.round(estimatedKwh * 10) / 10;
+    document.getElementById('editInputKwh').value = (diff === 23 && car === 'Tesla') ? 14 : roundedKwh;
+
+    onEditManualKwhChange();
+  } else {
+    displayDif.innerText = '--%';
+  }
+}
+
+function onEditManualKwhChange() {
+  const kwh = parseFloat(document.getElementById('editInputKwh').value) || 0;
+  const rate = parseFloat(document.getElementById('editInputRatePerKwh').value) || 0;
+  const costInput = document.getElementById('editInputTotalCost');
+  const totalCost = kwh * rate;
+  costInput.value = totalCost.toFixed(2);
+  onEditTimeOrPercentChange();
+}
+
+function onEditPriceRateChange() {
+  onEditManualKwhChange();
+}
+
+function onEditTotalCostManualChange() {
+  const totalCost = parseFloat(document.getElementById('editInputTotalCost').value) || 0;
+  const kwh = parseFloat(document.getElementById('editInputKwh').value) || 0;
+  if (kwh > 0 && totalCost >= 0) {
+    const rate = totalCost / kwh;
+    document.getElementById('editInputRatePerKwh').value = rate.toFixed(4);
+  }
+}
+
+// Desar canvis del modal
+async function handleEditFormSubmit(e) {
+  e.preventDefault();
+  const editSubmitBtn = document.getElementById('editSubmitBtn');
+  editSubmitBtn.disabled = true;
+
+  const id = document.getElementById('editChargeId').value;
+  const rowNumber = parseInt(document.getElementById('editRowNumber').value, 10) || null;
+  const oldHoraInici = document.getElementById('editOldHoraInici').value;
+  const car = document.getElementById('editInputCotxe').value || 'Tesla';
+  const pdc = document.getElementById('editInputPdC').value.trim() || 'Home';
+  const rawDate = document.getElementById('editInputDate').value;
+  const diaFormatted = formatInputDateToDia(rawDate);
+
+  const startTime = document.getElementById('editInputStartTime').value;
+  const endTime = document.getElementById('editInputEndTime').value;
+  const minutes = calculateDurationMinutes(startTime, endTime);
+
+  const pInVal = document.getElementById('editPercentIn').value;
+  const pFiVal = document.getElementById('editPercentFi').value;
+  const percentIn = pInVal !== '' ? `${pInVal}%` : '0%';
+  const percentFi = pFiVal !== '' ? `${pFiVal}%` : '0%';
+  const diffVal = (pInVal !== '' && pFiVal !== '') ? (parseInt(pFiVal, 10) - parseInt(pInVal, 10)) : 0;
+  const percentDif = `${diffVal}%`;
+
+  const kwh = parseFloat(document.getElementById('editInputKwh').value) || 0;
+  const avgKw = minutes > 0 ? (kwh / (minutes / 60)).toFixed(1).replace('.', ',') : '3,5';
+  const ratePerKwh = parseFloat(document.getElementById('editInputRatePerKwh').value) || 0;
+  const totalCost = parseFloat(document.getElementById('editInputTotalCost').value) || 0;
+
+  const preuFormatted = `${ratePerKwh.toFixed(4).replace('.', ',')} €`;
+  const costFormatted = `${totalCost.toFixed(2).replace('.', ',')} €`;
+  const kmVal = document.getElementById('editInputKm').value ? parseInt(document.getElementById('editInputKm').value, 10) : '';
+
+  const idx = charges.findIndex(c => c.id === id);
+  if (idx === -1) {
+    showToast('Error: no s\'ha trobat el registre per actualitzar', 'error');
+    editSubmitBtn.disabled = false;
+    return;
+  }
+
+  const updatedCharge = {
+    ...charges[idx],
+    Dia: diaFormatted,
+    PdC: pdc,
+    HoraInici: startTime + (startTime.split(':').length === 2 ? ':00' : ''),
+    HoraFi: endTime + (endTime.split(':').length === 2 ? ':00' : ''),
+    Temps: minutes,
+    PercentIn: percentIn,
+    PercentFi: percentFi,
+    PercentDif: percentDif,
+    Kwh: kwh,
+    KwMijans: avgKw,
+    Preu: preuFormatted,
+    Cost: costFormatted,
+    CostNum: totalCost,
+    Cotxe: car,
+    Km: kmVal,
+    rowNumber: rowNumber,
+    oldHoraInici: oldHoraInici,
+    synced: false
+  };
+
+  charges[idx] = updatedCharge;
+
+  if (kmVal) {
+    updateLastKnownKmFromCharges();
+  }
+
+  saveChargesLocally();
+  renderHistory();
+  closeEditModal();
+  showToast('✓ Registre actualitzat correctament!');
+
+  const apiUrl = getApiUrl();
+  if (apiUrl) {
+    syncChargeUpdateToSheets(updatedCharge);
+  }
+
+  editSubmitBtn.disabled = false;
+}
+
+// Sincronitzar modificació amb Google Sheets
+async function syncChargeUpdateToSheets(charge) {
+  const apiUrl = getApiUrl();
+  if (!apiUrl) return false;
+
+  updateSyncStatus('Actualitzant al Google Sheet...');
+  const payloadStr = JSON.stringify({
+    action: 'updateRow',
+    rowNumber: charge.rowNumber,
+    charge: charge
+  });
+
+  let ok = false;
+  try {
+    await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: payloadStr
+    });
+    ok = true;
+  } catch (err) {
+    console.warn('POST ha fallat en actualitzar, utilitzant rescat GET...', err);
+  }
+
+  if (!ok) {
+    ok = await sendViaGetRescue(apiUrl, 'updateRow', charge);
+  }
+
+  if (ok) {
+    charge.synced = true;
+    saveChargesLocally();
+    renderHistory();
+    updateSyncStatus('Google Sheet actualitzat');
+    return true;
+  } else {
+    updateSyncStatus('Desat localment (actualització pendent)');
+    return false;
+  }
+}
+
+// Eliminar càrrega
+function deleteCharge(id) {
+  const charge = charges.find(c => c.id === id);
+  if (!charge) return;
+
+  const confirmMsg = `Vols eliminar la càrrega del ${charge.Dia} (${charge.Cotxe} • ${charge.Cost || charge.Kwh + ' kWh'})?`;
+  if (confirm(confirmMsg)) {
+    charges = charges.filter(c => c.id !== id);
+    saveChargesLocally();
+    renderHistory();
+    showToast('Registre eliminat de l\'app');
+
+    const apiUrl = getApiUrl();
+    if (apiUrl && charge.rowNumber) {
+      deleteSingleChargeFromSheets(charge);
+    }
+  }
+}
+
+// Eliminar fila a Google Sheets
+async function deleteSingleChargeFromSheets(charge) {
+  const apiUrl = getApiUrl();
+  if (!apiUrl || !charge.rowNumber) return;
+
+  try {
+    updateSyncStatus('Eliminant fila del Google Sheet...');
+    await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'deleteRow',
+        rowNumber: charge.rowNumber,
+        charge: charge
+      })
+    });
+    updateSyncStatus('Fila eliminada del Google Sheet');
+  } catch (err) {
+    console.warn('Error eliminant del full:', err);
+  }
+}
+
+// Mecanisme de rescat GET / JSONP que mai falla per CORS o redirects als mòbils
+function sendViaGetRescue(apiUrl, action, charge) {
+  return new Promise((resolve) => {
+    try {
+      const cbName = 'rescueCb_' + Math.floor(Math.random() * 1000000);
+      const script = document.createElement('script');
+      let timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, 8000);
+
+      function cleanup() {
+        if (timer) clearTimeout(timer);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+
+      window[cbName] = function(resp) {
+        cleanup();
+        if (resp && resp.status === 'success') {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      };
+
+      script.onerror = function() {
+        cleanup();
+        resolve(false);
+      };
+
+      const sep = apiUrl.includes('?') ? '&' : '?';
+      const encoded = encodeURIComponent(JSON.stringify(charge));
+      const rowParam = charge.rowNumber ? `&rowNumber=${charge.rowNumber}` : '';
+      script.src = `${apiUrl}${sep}action=${action}&payload=${encoded}${rowParam}&callback=${cbName}`;
+      document.body.appendChild(script);
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+// Forçar l'enviament de totes les càrregues guardades al mòbil pendents de sincronitzar
+async function pushPendingCharges() {
+  const apiUrl = getApiUrl();
+  if (!apiUrl) {
+    showToast('⚠️ Cal introduir la URL d\'Apps Script a Configuració primer!', 'warn');
+    switchTab('settings');
+    return;
+  }
+
+  const pending = charges.filter(c => c.synced === false);
+  if (pending.length === 0) {
+    showToast('Totes les càrregues ja estan sincronitzades!');
+    return;
+  }
+
+  const btn = document.getElementById('btnPushPending');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = 'Enviant...';
+  }
+
+  updateSyncStatus(`Enviant ${pending.length} càrregues pendents...`);
+  let successCount = 0;
+
+  for (const c of pending) {
+    const success = await syncSingleChargeToSheets(c);
+    if (success) successCount++;
+  }
+
+  saveChargesLocally();
+  renderHistory();
+
+  if (btn) {
+    btn.disabled = false;
+    btn.innerText = 'Enviar ara';
+  }
+
+  if (successCount > 0) {
+    showToast(`✓ S'han afegit ${successCount} càrregues al Google Sheet!`);
+    await reloadFromSheetCsv();
+  } else {
+    showToast('No s\'ha pogut connectar. Comprova la URL a Configuració', 'error');
   }
 }

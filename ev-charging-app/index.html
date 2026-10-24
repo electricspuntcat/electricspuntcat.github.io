@@ -254,6 +254,20 @@
 
     <!-- TAB 2: HISTÒRIC I SEGUIMENT -->
     <section id="tab-history" class="space-y-4 hidden">
+
+      <!-- Banner de sincronització de càrregues pendents -->
+      <div id="pendingSyncBanner" class="hidden bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 flex items-center justify-between gap-3 text-xs text-amber-300 shadow-md">
+        <div class="flex items-center gap-2">
+          <span class="text-base">⚠️</span>
+          <div>
+            <div class="font-bold text-white">Càrregues pendents d'enviar</div>
+            <div class="text-[11px] text-amber-200/80">Tens <strong id="pendingCount" class="text-amber-300">0</strong> càrregues al mòbil que encara no s'han afegit al Google Sheet.</div>
+          </div>
+        </div>
+        <button type="button" onclick="pushPendingCharges()" id="btnPushPending" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 text-white font-bold text-xs whitespace-nowrap shadow transition active:scale-95">
+          Enviar ara
+        </button>
+      </div>
       
       <!-- Targetes Resum Mètriques Reals -->
       <div class="grid grid-cols-2 gap-3">
@@ -372,8 +386,157 @@
             Recarregar CSV
           </button>
         </div>
+
+        <!-- Estat i enviament de pendents -->
+        <div id="settingsPendingBox" class="hidden bg-slate-950 p-3 rounded-xl border border-amber-500/30 space-y-2">
+          <div class="text-xs text-amber-300 flex items-center justify-between">
+            <span>⚠️ Càrregues pendents al dispositiu:</span>
+            <span id="settingsPendingCount" class="font-bold bg-amber-500/20 px-2 py-0.5 rounded text-amber-200">0</span>
+          </div>
+          <button onclick="pushPendingCharges()" class="w-full py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition">
+            📤 Forçar enviament de totes les càrregues pendents
+          </button>
+        </div>
       </div>
     </section>
+
+    <!-- MODAL D'EDICIÓ DE REGISTRE -->
+    <div id="editModal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 transition-all duration-300 opacity-0 pointer-events-none">
+      <div class="bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-3xl w-full max-w-lg max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+        
+        <!-- Modal Header -->
+        <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 sticky top-0 z-10">
+          <div class="flex items-center gap-2">
+            <div class="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-sm font-bold">
+              ✏️
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-white leading-tight">Editar Registre</h3>
+              <p class="text-[11px] text-slate-400" id="editModalSubtitle">Modifica les dades d'aquesta càrrega</p>
+            </div>
+          </div>
+          <button type="button" onclick="closeEditModal()" class="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition active:scale-95">
+            ✕
+          </button>
+        </div>
+
+        <!-- Modal Form (scrollable) -->
+        <form id="editForm" onsubmit="handleEditFormSubmit(event)" class="p-5 overflow-y-auto space-y-4">
+          <input type="hidden" id="editChargeId">
+          <input type="hidden" id="editRowNumber">
+          <input type="hidden" id="editOldHoraInici">
+
+          <!-- Selector de Cotxe -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Vehicle</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" id="editBtnTesla" onclick="selectEditCar('Tesla')" class="py-2.5 px-3 rounded-xl border-2 flex items-center justify-center gap-2 font-bold text-xs transition active:scale-95 bg-slate-950 border-red-500 text-white">
+                <span>⚡</span> Tesla Model 3
+              </button>
+              <button type="button" id="editBtnPeugeot" onclick="selectEditCar('Peugeot')" class="py-2.5 px-3 rounded-xl border-2 flex items-center justify-center gap-2 font-bold text-xs transition active:scale-95 bg-slate-950 border-slate-800 text-slate-400">
+                <span>🦁</span> Peugeot e-2008
+              </button>
+            </div>
+            <input type="hidden" id="editInputCotxe" value="Tesla">
+          </div>
+
+          <!-- Punt de Càrrega (PdC) -->
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Punt de Càrrega (PdC)</label>
+            <div class="grid grid-cols-4 gap-1.5 mb-1.5">
+              <button type="button" onclick="setEditPdC('Home')" class="py-1 text-[11px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">Home</button>
+              <button type="button" onclick="setEditPdC('Port Mataró')" class="py-1 text-[11px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">Port Mataró</button>
+              <button type="button" onclick="setEditPdC('La Roca AC')" class="py-1 text-[11px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">La Roca</button>
+              <button type="button" onclick="setEditPdC('Supercharger')" class="py-1 text-[11px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">Supercharger</button>
+            </div>
+            <input type="text" id="editInputPdC" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500 font-medium">
+          </div>
+
+          <!-- Data -->
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Data (Dia)</label>
+            <input type="date" id="editInputDate" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-emerald-500">
+          </div>
+
+          <!-- Horaris -->
+          <div class="bg-slate-950/60 p-3 rounded-2xl border border-slate-800">
+            <span class="text-xs font-medium text-slate-300 block mb-1.5">Horari</span>
+            <div class="grid grid-cols-2 gap-2.5">
+              <div>
+                <span class="text-[10px] text-slate-400 block mb-0.5">Hora Inici</span>
+                <input type="time" id="editInputStartTime" step="1" required onchange="onEditTimeOrPercentChange()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono">
+              </div>
+              <div>
+                <span class="text-[10px] text-slate-400 block mb-0.5">Hora Fi</span>
+                <input type="time" id="editInputEndTime" step="1" required onchange="onEditTimeOrPercentChange()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-100 font-mono">
+              </div>
+            </div>
+            <div class="flex items-center justify-between text-[11px] text-slate-400 mt-2">
+              <span id="editCalcDuration">Temps: 240 min</span>
+              <span id="editCalcAvgKw">Potència mitjana: 3,5 kW</span>
+            </div>
+          </div>
+
+          <!-- Bateria (% in i % fi) -->
+          <div class="bg-slate-950/60 p-3 rounded-2xl border border-slate-800">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-xs font-semibold text-slate-300">Bateria (% inicial i final)</span>
+              <span class="text-[10px] text-slate-400">Actualitza kWh automàticament</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <div>
+                <span class="text-[10px] text-slate-400 block mb-0.5">% Inicial</span>
+                <input type="number" id="editPercentIn" min="0" max="100" oninput="onEditBatteryPercentInput()" class="w-full bg-slate-900 border border-slate-800 rounded-xl py-1.5 px-2 text-xs text-center font-semibold text-slate-100">
+              </div>
+              <div>
+                <span class="text-[10px] text-slate-400 block mb-0.5">% Final</span>
+                <input type="number" id="editPercentFi" min="0" max="100" oninput="onEditBatteryPercentInput()" class="w-full bg-slate-900 border border-slate-800 rounded-xl py-1.5 px-2 text-xs text-center font-semibold text-slate-100">
+              </div>
+              <div>
+                <span class="text-[10px] text-emerald-400 block mb-0.5">% Dif</span>
+                <div id="editDisplayPercentDif" class="w-full bg-slate-900 border border-emerald-500/30 rounded-xl py-1.5 text-xs text-center font-bold text-emerald-400">
+                  +0%
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Energia i Km -->
+          <div class="grid grid-cols-2 gap-2.5">
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Energia (kWh)</label>
+              <input type="number" id="editInputKwh" step="0.01" min="0" required oninput="onEditManualKwhChange()" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-300 mb-1">Odòmetre (Km)</label>
+              <input type="number" id="editInputKm" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100">
+            </div>
+          </div>
+
+          <!-- Preu i Cost -->
+          <div class="bg-slate-950 p-3 rounded-2xl border border-slate-800 grid grid-cols-2 gap-2.5">
+            <div>
+              <span class="text-[10px] text-slate-400 block mb-0.5">Preu / kWh (€)</span>
+              <input type="number" id="editInputRatePerKwh" step="0.0001" min="0" oninput="onEditPriceRateChange()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-200">
+            </div>
+            <div>
+              <span class="text-[10px] text-emerald-400 block mb-0.5 font-bold">Cost Total (€)</span>
+              <input type="number" id="editInputTotalCost" step="0.01" min="0" required oninput="onEditTotalCostManualChange()" class="w-full bg-slate-900 border border-emerald-500/50 rounded-xl px-2.5 py-1.5 text-sm font-extrabold text-emerald-400">
+            </div>
+          </div>
+
+          <!-- Modal Footer Buttons -->
+          <div class="flex gap-2 pt-2">
+            <button type="button" onclick="closeEditModal()" class="w-1/3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition">
+              Cancel·lar
+            </button>
+            <button type="submit" id="editSubmitBtn" class="w-2/3 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 text-white font-bold text-xs shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition">
+              Desar Canvis
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
 
   </main>
 
